@@ -513,4 +513,5 @@ InnoDB 데이터 파일은 기본적으로 MySQL 서버가 시작될 때 항상 
 
 기본값은 0이다.
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/9e724242-f1ee-407e-9cfd-295a85b49023/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/764806a5-175e-4029-b442-e014758b9af2)
+
