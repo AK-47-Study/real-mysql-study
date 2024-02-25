@@ -1,3 +1,5 @@
+# 04 아키텍처
+
 MySQL = MySQL 엔진(머리) + 스토리지 엔진(손발)
 
 스토리지 엔진은 핸들러 API만 만족하면 구현해서 사용가능하다. → 무슨 말일까?
@@ -8,7 +10,8 @@ MySQL은 다른 DBMS와 달리 `독특한 구조`를 가지고 있다. 이는 �
 
 ### 4.1.1 MySQL의 전체 구조
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/e4beea9e-77f3-4347-a784-237619613366/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/ccf25032-e492-4a7b-9b73-a38c526ab08d)
+
 
 MySQL은 프로그래밍 언어로부터 접근 방법을 지원한다. JDBC와 같은 표준 드라이버 등이 그것이며, 이 드라이버를 이용해 MySQL 서버에서 쿼리를 사용할 수 있다. 
 
@@ -48,8 +51,8 @@ MySQL은 표준 SQL(ANSI SQL)을 지원해 타 DBMS와 호환되어 실행가능
     
     mysql> CREATE TABLE test_table (fd1 INT, fd2 INT) **ENGINE=INNODB**;
     ```
-    
-    ![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/c152a052-f5d1-4f80-b75a-5cd33c5c63ad/Untitled.png)
+    ![image](https://github.com/only-juun/real-mysql-study/assets/79013722/c04a5abe-fd4a-4cf5-bbf3-015f1b481bc4)
+
     
     데이터베이스 선택을 안하면 아래와 같은 에러 발생
     
@@ -67,13 +70,14 @@ MySQL 엔진과 스토리지 엔진이 데이터를 주고받는 방법이 핸�
 mysql> SHOW GLOBAL STATUS LIKE 'Handler%';
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/50aa1baa-c1ef-4b19-8bb9-53a5085fe827/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/7e81d2d4-f9a1-41e7-af77-57b7e08f4bc4)
 
                                                   <아무것도 하지 않았는데 뭐가 이리 많을까?>
 
 ### 4.1.2 MySQL 스레딩 구조
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/1405834a-fb7e-4ce4-8c5e-379bf3b425ea/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/56090e4b-5c71-422a-9b66-9d47a57b52d3)
+
 
 `MySQL`은 프로세스 기반이 아니라 `스레드 기반`이다.
 
@@ -86,11 +90,13 @@ mysql> SELECT thread_id, name, type, processlist_user, processlist_host
 			 FROM performance_schema.threads ORDER BY type, thread_id;
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/79c5a17f-fce4-4873-895b-cdcbbf2e6812/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/ab7b2c8d-b2ae-492a-a9af-416e1dbeec1f)
+
 
 3개의 foreground Thread를 제외한 나머지는 모두 background thread이다. 
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/82510504-cc9e-4444-80b9-cdd9dcce02e8/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/6827ad9f-b3b1-4aac-b7ea-61e01c634627)
+
 
 책에서는 스레드가 총 44개지만 나는 38개 
 
@@ -145,7 +151,8 @@ InnoDB의 경우 다음 작업들이 백그라운드로 처리된다.
 
 ### 4.1.3 메모리 할당 및 사용 구조
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/d690934b-c7bf-4d25-b46d-e22b40714c8f/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/1670f61e-b9a8-4f63-b5b7-04f85462e6ae)
+
 
 MySQL의 메모리 공간은 `글로벌 메모리 영역`과 `로컬 메모리 영역`으로 구분할 수 있다. 
 
@@ -185,13 +192,15 @@ MySQL의 메모리 공간은 `글로벌 메모리 영역`과 `로컬 메모리 �
 
 ### 4.1.4 플러그인 스토리지 엔진 모델(P.86)
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/31a4cea5-fe7b-488c-8787-c24eae050fad/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/788a20e1-c88e-4ccb-a3b6-6fac4c194c43)
+
 
 MySQL의 독특한 구조 중 하나가 `플러그인 모델`이다. 
 
 `스토리지 엔진`,아니라 전문 검색 엔진을 위한 `검색어 파서`, `사용자 인증`(Native Authentication, Caching SHA-2 Authentication)도 플러그인으로 사용할 수 있다. 
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/7be5b940-668c-41c6-8ad4-0208d82a727b/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/51fcf703-c8a6-40e8-b26f-5b9ba3be3e30)
+
 
 MySQL에서 쿼리가 실행되는 과정이다.
 
@@ -215,7 +224,8 @@ MySQL에서 쿼리가 실행되는 과정이다.
 mysql> SHOW ENGINES;
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/2792d3fb-7b0a-4b80-8d49-5bc527818dbe/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/b38cc4b5-6c45-42e3-a37c-482589d5e1c9)
+
 
 MySQL 서버에서 지원되는 스토리지 엔진은 위와 같으며, Support 칼럼의 값의 의미는 아래와 같다.
 
@@ -230,7 +240,8 @@ NO를 사용하려면 MySQL 서버를 다시 빌드하거나, 플러그인 형�
 mysql> SHOW PLUGINS;
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/4525cb51-a080-4685-86a5-6252aaa83bcd/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/a79f067d-9156-4e0a-88aa-eeb4fb9b67ac)
+
 
 플러그인들을 확인할 수 있으며 자세한 정보는 매뉴얼을 참조하면 된다.
 
@@ -252,11 +263,13 @@ mysql> INSTALL COMPONENT 'file://component_validate_password';
 mysql> SELECT * FROM mysql.component;
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/494efdfe-97cf-481d-92dc-06e942ef0ed8/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/0d94103c-cadc-4eb9-b94a-e8fe5dee1280)
+
 
 ### 4.1.6 쿼리 실행 구조
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/291afc7b-32c4-4737-ab33-7b0e8c287cb6/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/c00e06b4-86bf-4c86-b3e3-c195f4f0f199)
+
 
 **4.1.6.1 쿼리 파서**
 
@@ -321,7 +334,8 @@ Percona Server의 스레드 풀은 기본적으로 CPU 코어 수만큼 스레�
 
 `선순위 큐/후순위 큐 기능`을 이용해 특정 트랜잭션이나 쿼리를 우선적으로 처리할 수도 있다. 먼저 시작된 트랜잭션 내에 속한 SQL을 빨리 처리해주면 해당 트랜잭션이 가지고 있던 잠금이 빨리 해제되고 잠금 경합을 낮춰서 전체적인 처리성능을 향상시킬 수 있다. 
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/475f0337-f79d-4996-8c75-896f34d3e11e/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/8fc1c246-87a3-4d6d-84d3-9cacdaee6588)
+
 
 ### 4.1.10 트랜잭션 지원 메타데이터
 
@@ -331,9 +345,11 @@ Percona Server의 스레드 풀은 기본적으로 CPU 코어 수만큼 스레�
 
 8.0부터는 이를 해결하기 위해 `InnoDB의 테이블`을 사용한다. 시스템 테이블을 모두 InnoDB 스토리지 엔진을 사용하도록 개선되었고, 시스템 테이블과 메타데이터를 모아 `mysql DB에 저장`한다. mysql DB는 `mysql.ibd`라는 이름의 테이블 스페이스에 저장된다. 
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/eb179459-2bac-4829-9416-81a71ed48aee/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/bc722fe2-1ff9-4e80-a4e1-833cd8b73cc6)
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/a8e75623-dfd3-459f-b356-c395931166a7/Untitled.png)
+
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/813d2827-abf1-44d8-b4ed-ac36b633e398)
+
 
 데이터 딕셔너리와 시스템 테이블이 모두 `트랜잭션 기반의 InnoDB 스토리지
 엔진에 저장`되면서 비정상 종료 시에도 원자성이 유지된다.
@@ -344,7 +360,8 @@ Percona Server의 스레드 풀은 기본적으로 CPU 코어 수만큼 스레�
 
 InnoDB는 스토리지 엔진 중 거의 유일하게 `레코드 기반의 잠금`을 제공한다. 덕분에 높은 동시성 처리와 안정성, 성능 모든 면에서 우수하다.
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/91921e07-2ad7-41e8-b6e8-3ffc50144ee0/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/14573f07-0419-43f7-8c64-373e5b6864b0)
+
 
 ### 4.2.1 프라이머리 키에 의한 클러스터링
 
@@ -402,11 +419,13 @@ mysql> INSERT INTO member (m_id, m_name, m_area) VALUES (12, '홍길동', '서�
 mysql> COMMIT;
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/19c988d8-5d89-40a4-9523-a9d7a0ba4d44/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/73a8f11b-0117-4147-9a41-a09675335123)
+
 
 레코드를 삽입하고 COMMIT 했을 때 데이터베이스의 상태는 아래와 같다. 
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/4716d5a6-caed-4f01-ac7b-f8cc6137f130/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/cdf68551-47f2-4225-89a4-00e38a071afe)
+
 
 ```sql
 mysql> UPDATE member SET m_area='경기' WHERE m_id=12;
@@ -414,7 +433,8 @@ mysql> UPDATE member SET m_area='경기' WHERE m_id=12;
 
 레코드를 업데이트하면 데이터베이스는 아래와 같은 상태로 바뀐다.
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/dfa20b24-94ce-4d15-addd-dc9c504eb7b6/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/c4ce01a4-1544-4879-86c5-6df3a27c0070)
+
 
 커밋 여부와 상관없이 InnoDB의 버퍼 풀은 새로운 값으로 업데이트 되며, 기존의 내용은 언두영역으로 복사된다. 
 
@@ -424,7 +444,8 @@ mysql> UPDATE member SET m_area='경기' WHERE m_id=12;
 mysql> SELECT * FROM member WHERE m_id=12;
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/4b2e7987-87eb-4a48-8cbe-1802644f40db/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/06caa0f4-6abf-4555-88d4-a9fdeb9efe84)
+
 
 이는 transaction_isolation 시스템 변수의 격리 수준을 따른다. 
 
@@ -432,7 +453,8 @@ mysql> SELECT * FROM member WHERE m_id=12;
 mysql> SHOW GLOBAL VARIABLES LIKE 'transaction_isolation';
 ```
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/ae54adfc-b85c-4c32-b150-0005cc1b34dc/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/cbb872ea-503b-4e1e-876d-07c0a6a38501)
+
 
 `READ_UNCOMMITTED`인 경우, InnoDB 버퍼 풀이 현재 가지고 있는 `변경된 데이터`를 읽는다. 
 
@@ -448,7 +470,8 @@ InnoDB 스토리지 엔진은 앞서 본 `MVCC를 이용`해 `잠금을 걸지 �
 
 격리 수준이 `READ_UNCOMMITTED`나 `READ_COMMITTED`, `REPEATABLE_READ` 수준인 경우 순수한 읽기 작업은 다른 트랜잭션의 변경 작업과 관계없이 항상 잠금을 대기하지 않고 바로 실행된다. 
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/019a4fa9-b99b-4fac-9f25-bd1b5e7d0f7d/Untitled.png)
+![image](https://github.com/only-juun/real-mysql-study/assets/79013722/18864288-d6db-4230-9f6f-32e64254269e)
+
 
 InnoDB에서는 변경되기 전의 데이터를 읽기 위해 언두 로그를 사용한다.
 
@@ -485,10 +508,6 @@ InnoDB 데이터 파일은 기본적으로 MySQL 서버가 시작될 때 항상 
 재시작 후에 InnoDB 테이블이 인식되면 데이터를 백업한 뒤 DB와 테이블을 재생성하는 것이 좋다. 
 
 1~6까지의 상황과 해결 방법은 다음과 같다. 
-
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/da0107ed-2fbf-465d-aeb4-a1ab5a3bfc66/Untitled.png)
-
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/e1cdd83a-bb4e-43bb-b8ac-f046170c6a41/275ae51b-7569-46b6-8959-f2eec2ad7007/Untitled.png)
 
 모두 도전해도 서버가 시작되지 않으면 백업을 이용해 재 구축하는 것 말곤 방법이 없다.
 
