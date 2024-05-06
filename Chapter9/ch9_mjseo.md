@@ -1364,3 +1364,1511 @@ MySQL 서버는 `두 집합`에서 하나씩 가져와서 서로 비교하면서
 정렬된 두 집합의 결과를 하나씩 가져와 `중복 제거`를 수행할 때 `Priority Queue`가 이용된다.
 
 ![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/6eb7d8ac-3291-40b2-bbcc-55d93b364f37)
+
+### 🙃 인덱스 머지 - 정렬 후 합집합(index_merge_sort_union)
+
+- `인덱스 머지` 작업을 하는 도중에 결과의 `정렬`이 필요한 경우 인덱스 머지 최적화의 `‘Sort union’` 알고리즘을 사용한다.
+
+```sql
+mysql> EXPLAIN
+         SELECT * FROM employees
+         WHERE first_name='Matt'
+            OR hire_date BETWEEN '1987-03-01' AND '1987-03-31';
+```
+
+위의 쿼리를 2개의 쿼리로 분리해서 생각해보면 `‘Sort union’` 알고리즘을 이해하기 쉽다.
+
+```sql
+mysql> SELECT * FROM employees WHERE first_name='Matt';
+mysql> SELECT * FROM employees WHERE hire_date BETWEEN '1987-03-01' AND '1987-03-31';
+```
+
+첫 번째 쿼리는 `emp_no`로 `정렬`되어 출력되지만 두 번째 `쿼리`는 그렇지 않다.
+
+따라서 `중복`을 `제거`하기 위해 `우선순위 큐`를 사용하는 것이 불가능하다.
+
+MySQL 서버는 두 집합의 결과에서 `중복`을 제거하기 위해 각 집합을 `emp_no` 컬럼으로 정렬한 뒤
+
+`중복 제거`를 수행한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/6999fc33-654b-4b17-bfcb-fcb92ec06683)
+
+위의 실행계획처럼 `인덱스 머지` 최적화에서 `중복 제거`를 위해 **강제로 정렬을 수행**해야 하는 경우,
+
+`Extra 컬럼`에 `“Using sort_union”` 문구가 표시된다.
+
+### 🤔 세미 조인(semijoin)
+
+- `다른 테이블`과 실제 `조인`을 수행하지 않고 다른 테이블에서 `조건`에 `일치`하는 레코드가 있는지 없는지 `체크`만 하는 형태의 쿼리를 `세미조인`이라고 한다.
+- `5.7 버전`은 세미 조인 형태의 **쿼리를 최적화하는 부분이 상당히 취약**하다.
+
+```sql
+mysql> SELECT * 
+       FROM employees e
+       WHERE e.emp_no IN
+          (SELECT de.emp_no FROM dept_emp de WHERE de.from_date='1995-01-01');
+```
+
+`세미 조인` 최적화 기능이 없었을 때는 `employees 테이블`을 풀 스캔하면서 **한 건씩 서브쿼리의 조건을 비교**했다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/085bea56-195f-4a41-9e81-31ebd798fcc0)
+
+`실행 계획`을 보면 `57건`만 읽으면 될 쿼리를 `30만 건` 넘게 읽어서 처리하는 것을 볼 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/c4425781-02c1-4ec1-b382-9b93c13fef40)
+
+`세미 조인` 형태의 쿼리와 `안티 세미 조인` 형태의 쿼리는 `최적화 방법`에 차이가 있다.
+
+`= (subquery)` 형태와 `IN (subquery)` 형태의 세미 조인 쿼리에는 **3가지 최적화 방법을 적용**할 수 있다.
+
+- `세미 조인` 최적화
+- `IN-to-EXISTS` 최적화
+- `MATERIALIZATION` 최적화
+
+`<> (subquery)` 형태와 `NOT IN (subquery)` 형태의 안티 세미 조인 쿼리는 **2가지 최적화 방법**이 있다.
+
+- `IN-to-EXISTS` 최적화
+- `MATERIALIZATION` 최적화
+
+`8.0` 부터는 세미 조인 쿼리의 성능을 개선하기 위한 `최적화 전략`들이 있다.
+
+- Table-Pull-out
+- Duplicate Weed-out
+- First Match
+- Loose Scan
+- Materialization
+
+`쿼리`에 사용되는 테이블과 `조인 조건`의 `특성`에 따라 `옵티마이저`는 전략을 **선별적으로 사용**한다.
+
+`Table-Pull-out` 전략은 사용 가능하면 **항상 세미 조인보다는 좋은 성능**을 낸다.
+
+`First Match`와 `Loose Scan` 전략은 `firstmatch`와 `loosescan` 옵티마이저 옵션으로 사용 여부를 
+
+결정할 수 있다.
+
+`Duplicate Weed-out`과 `Materialization` 전략은 `materialization` 옵티마이저 스위치로
+
+사용 여부를 결정할 수 있다.
+
+`optimizer_switch` 시스템 변수의 `semijoin` 옵티마이저 옵션은 `firstmatch`와 `loosescan`,
+
+`materialization` 옵티마이저 **옵션을 한 번에 활성화 하거나 비활성화할 때 사용**된다.
+
+### 😵‍💫 테이블 풀-아웃(Table Pull-out)
+
+- `세미조인`의 `서브쿼리`에 사용된 테이블을 **아우터 쿼리로 끄집어낸 후에 쿼리를 조인 쿼리로 재작성**하는 형태의 최적화다.
+- `서브쿼리` 최적화가 도입되기 이전에 **수동으로 쿼리를 튜닝**하던 대표적인 `방법`이었다.
+
+```sql
+mysql> EXPLAIN
+       SELECT * FROM employees e
+       WHERE e.emp_no IN (SELECT de.emp_no FROM dept_emp de WHERE de.dept_no='d009');
+```
+
+이 쿼리의 `실행 계획`을 보면 아래와 같다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/56e96c48-cce2-43fa-ad5f-5444e1983ebf)
+
+`Table pullout` 최적화는 별도의 실행 계획의 `Extra 컬럼`에 표시되지 않는다.
+
+`Table pullout` 최적화가 사용됐는지는 해당 `테이블`들의 `id 컬럼` 을 `동등 비교`해보는 것이 가장 간단하다.
+
+더 정확하게 확인하려면 `EXPLAIN` 명령을 실행한 직후 `SHOW WARNINGS` 명령으로
+
+`옵티마이저`가 **재작성한 쿼리를 살펴보는 방법**이 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/5f6b735d-c17f-475c-900b-4fee796bbec9)
+
+`IN(subquery)` 형태의 쿼리를 `JOIN`으로 재작성 된 것을 볼 수 있다.
+
+`Table pullout` 최적화는 모든 형태의 `서브쿼리`에서 사용될 수 있는 것은 아니다.
+
+- `Table pullout` 최적화는 **세미 조인 서브쿼리에서만 사용 가능**하다.
+- `Table pullout` 최적화는 `서브 쿼리` 부분이 `UNIQUE` 인덱스나 `PK 룩업`으로 결과가 `1건`인 경우에만 사용 가능하다.
+- `Table pullout`이 적용된다고 하더라도 `기존 쿼리`에서 사용하는 `최적화 방법`이 사용 불가능한 것은 아니므로 가능하다면 `Table pullout` 최적화를 적용한다.
+- 만약 서브쿼리의 모든 테이블이 `아우터 쿼리`로 끄집어 낼 수 있다면 **서브쿼리 자체는 없어진다.**
+- `Table pullout` 최적화가 있으므로 `서브쿼리` 조인으로 풀어서 사용할 필요가 없다.
+
+### 🥱 퍼스트 매치(firstmatch)
+
+- `First Match` 최적화 전략은 `IN(subquery)` 형태의 세미 조인을 `EXISTS(subquery)` 형태로 튜닝한 것과 비슷하게 실행된다.
+
+```sql
+mysql> EXPLAIN SELECT * 
+       FROM employees e WHERE e.first_name='Matt'
+         AND e.emp_no IN (
+           SELECT t.emp_no FROM titles t
+           WHERE t.from_date BETWEEN '1995-01-01' AND '1995-01-30'
+         );
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/a586eb49-c2a5-480c-a33d-9942f562156d)
+
+`실행 계획`의 id 컬럼의 값이 모두 `“1”`로 표시 되었으므로 `titles 테이블`이 `서브쿼리 패턴`이 아닌
+
+`조인`으로 처리됐다는 것을 알 수 있다.
+
+`“FirstMatch(e)”`는 `employees` 테이블의 레코드에 대해 `titles` 테이블에 일치하는 레코드 1건만 찾으면
+
+더 이상 `titles` 테이블 검색을 하지 않는다는 것을 의미한다.
+
+의미론적으로는 `EXISTS(subquery)`와 동일하게 처리 된 것이다.
+
+하지만 `FirstMatch`는 **서브쿼리가 아니라 조인으로 풀어서 실행**하면서 일치하는 `첫 번째 레코드`만 `검색`하도록 `최적화`를 수행한 것이다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/07b8eae4-aef7-471b-9f5e-cad5ef4c6e11)
+
+위의 쿼리를 `FirstMatch`로 최적화 후 수행한 과정을 그림으로 나타낸 것이다.
+
+1. `employees` 테이블에서 `first_name` 컬럼의 값이 `‘Matt’`인 사원의 정보를 `ix_firstname` 인덱스를 이용해 `Range Scan`으로 읽는다.
+2. `first_name`이 `‘Matt’`이고 사원번호가 `12302`인 레코드를 **titles 테이블과 조인**해서 from_date 조건을 만족하는 레코드가 있는지 찾아본다.
+3. 일치하는 레코드가 없으므로 다음 레코드인 `emp_no`가 `243075`인 사원의 레코드를 읽어서 `titles` 테이블과 조인하여 `from_date` 조건을 만족하는 레코드가 있는지 확인한다.
+4. `titles 레코드` 중에서 조건을 만족하는 레코드를 찾았으므로 `243075`번 사원에 대해서는 **더 이상 titles 테이블을 탐색하지 않고 최종 결과를 반환**한다.
+
+`First Match` 최적화는 5.5 버전의 `IN-to-EXISTS` 변환과 거의 비슷하다.
+
+하지만 `FirstMatch` 최적화는 아래와 같은 장점이 더 있다.
+
+- `IN-to-EXISTS` 최적화에서는 **동등 조건 전파가 서브쿼리 내에서만 가능**했지만 `First Match` 최적화에서는 **아우터 쿼리의 테이블까지 전파**될 수 있다.
+- `IN-to-EXISTS` 변환 최적화 전략에서는 **아무런 조건 없이 변환이 가능할 때만 최적화를 수행**했지만 First Match 최적화는 `서브쿼리`의 **모든 테이블에 대해 최적화를 수행할 지 일부 테이블에 대해서만 수행**할지 `선택`할 수 있다.
+
+`First Match` 최적화 또한 특정 형태의 `서브쿼리`에서 자주 사용되는 최적화 방법이다.
+
+- `FirstMatch` 최적화에서 서브쿼리는 그 `서브쿼리`가 참조하는 **모든 아우터 테이블이 먼저 조회된 이후에 실행**된다.
+- `FirstMatch` 최적화가 사용되면 실행 계획의 Extra 컬럼에는 `“FirstMatch(table-N)”` 문구가 표시된다.
+- `FirstMatch` 최적화는 **상관 서브쿼리**에서도 사용될 수 있다.
+- `FirstMatch` 최적화는 `GROUP BY`나 집합 함수가 사용된 `서브쿼리`의 `최적화`에는 사용될 수 없다.
+
+`FirstMatch` 최적화는 `optimizer_switch` 시스템 변수에서 **semijoin & firstmatch 옵션이 모두 ON**으로 
+
+활성화 된 경우에만 사용할 수 있다.
+
+### ✌🏼루스 스캔(loose scan)
+
+- `LooseScan`은 인덱스를 사용하는 `GROUP BY` 최적화 방법 중 **루스 인덱스 스캔과 비슷한 읽기 방식을 사용**한다.
+
+```sql
+mysql> EXPLAIN
+       SELECT * FROM departments d WHERE d.dept_no IN (
+          SELECT de.dept_no FROM dept_emp de );
+```
+
+이 쿼리는 `dept_emp` 테이블에 존재하는 **모든 부서 번호에 대해 부서 정보를 읽어 오기 위한 쿼리**다.
+
+`departments` 테이블의 레코드는 `9건`이고, `dept_emp` 테이블의 레코드 건수는 `33`만건이다.
+
+`dept_emp` 테이블에는 **(dept_no, emp_no) 컬럼**의 조합으로 `PK 인덱스`가 만들어져 있다.
+
+그렇다면, `dept_emp` 테이블의 `PK`를 루스 인덱스 스캔으로 `유니크`한 `dept_no`만 읽으면
+
+**중복된 레코드까지 제거**하면서 아주 효율적으로 `서브쿼리` 부분을 `실행`할 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/3eb9ba76-2e16-481b-879c-ca87193f9f00)
+
+그림을 살펴보면 `dept_emp` 테이블이 **드라이빙 테이블로 실행**되고, `dept_emp` 테이블의 `PK`를
+
+`dept_no` 부분에서 **유니크하게 한 건씩만 읽고 있다는 것**을 알 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/1300e750-a1fa-4abf-8809-a088fa7e59f9)
+
+실행 계획을 보면 `Extra 컬럼`에 `“LooseScan”` 문구가 표시된 것을 알 수 있다.
+
+또한 각 테이블에 할당된 `id 컬럼`이 `1`이라는 것을 보았을 때 조인처럼 `처리`됐다는 점도 알 수 있다.
+
+`LooseScan`은 아래와 같은 특성을 가진다.
+
+- `루스 인덱스 스캔`으로 **서브쿼리 테이블**을 읽고, `아우터 테이블`을 **드리븐으로 사용해서 조인을 수행**한다.
+- `서브쿼리` 부분이 루스 인덱스 스캔을 사용할 수 있는 **조건이 갖춰져야 사용**할 수 있다.
+
+`LooseScan` 최적화는 아래와 같은 `서브쿼리 패턴`에서 사용할 수 있다.
+
+```sql
+SELECT .. FROM .. WHERE expr IN (SELECT keypart1 FROM tab WHERE ...)
+SELECT .. FROM .. WHERE expr IN (SELECT keypart2 FROM tab WHERE keypart1='상수' ...) 
+```
+
+`LooseScan` 최적화 사용 여부도 `optimizer_switch` 시스템 변수로 관리할 수 있다.
+
+```sql
+mysql> SET optimizer_switch='loosescan=off';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/6a69a89c-103e-4fff-bc17-bdf98a0bc615)
+
+### 😐 구체화(Materialization)
+
+- `세미 조인`에 사용된 서**브쿼리를 통째로 구체화**해서 쿼리를 `최적화`한다는 의미이다.
+- `내부 임시테이블`을 생성해서 **쿼리를 최적화**한다는 것을 의미한다.
+
+```sql
+mysql> EXPLAIN
+       SELECT * 
+       FROM employees e
+       WHERE e.emp_no IN
+          (SELECT de.emp_no FROM dept_emp de
+           WHERE de.from_date='1995-01-01');
+```
+
+이 쿼리는 `FirstMatch` 최적화를 사용하면 `employees` 테이블에 대한 조건이 `서브쿼리` 이외에는
+
+아무것도 없기 때문에 **employees 테이블을 풀 스캔**해야 한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/ad260d3e-055f-4116-9318-310ee934be4b)
+
+이 쿼리의 `실행계획`을 보면 **서브쿼리 구체화(Subquery Materialization)** 최적화를 수행했다.
+
+이 `쿼리`에서 사용하는 테이블은 `2개`인데 실행 계획이 `3개` 라인으로 출력된 것을 보면 `임시 테이블`을 생성해서
+
+**최적화를 수행**했다는 것을 알 수 있다.
+
+```sql
+mysql> EXPLAIN
+       SELECT * 
+       FROM employees e
+       WHERE e.emp_no IN
+           (SELECT de.emp_no FROM dept_emp de
+           WHERE de.from_date='1995-01-01'
+           GROUP BY de.dept_no);
+```
+
+이 쿼리 처럼 `서브쿼리` 내에 `GROUP BY` 절이 있어도 **Materialization 최적화가 가능**하다.
+
+`Matherialization` 최적화가 사용될 수 있는 형태의 `쿼리`도 제한 사항과 특성이 있다.
+
+- `IN(subquery)`에서 서브쿼리는 상관 서브쿼리가 아니어야 한다.
+- 서브쿼리는 `GROUP BY`나 `집합 함수`들이 **사용되어도 구체화를 사용**할 수 있다.
+- `구체화`가 사용된 경우에는 `내부 임시 테이블`이 사용된다.
+
+`Materialization` 최적화는 `optimizer_switch` 시스템 변수에서 **semijoin & materialization**
+
+옵션이 모두 `ON`으로 활성화 되어 있어야 사용 가능하다.
+
+`Materialization` 최적화만 비활성화 처리 하려면, `materialization` 옵션만 `OFF`로 설정하면 된다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/2ce20d58-69ef-4a6c-97b7-efd317ff115e)
+
+### 🙃 중복 제거(Duplicated Weed-out)
+
+- `세미 조인 서브쿼리`를 일반적인 `Inner Join` 쿼리로 바꿔서 실행하고 중복된 레코드를 제거하는 방법으로 처리하는 `최적화 알고리즘`이다.
+
+```sql
+mysql> EXPLAIN 
+       SELECT * FROM employees e
+       WHERE e.emp_no IN (SELECT s.emp_no FROM salaries s WHERE s.salary > 1500000);
+```
+
+`salaries` 테이블의 PK가 (emp_no + from_date) 이므로 `salary`가 150000 이상인 레코드를 조회하면
+
+`중복`된 `emp_no`가 발생할 수 있다.
+
+이 `쿼리`를 아래와 같이 재작성하면 `세미 조인 서브쿼리`와 동일한 결과를 얻을 수 있다.
+
+```sql
+mysql> SELECT e.*
+       FROM employees e, salaries s
+       WHERE e.emp_no=s.emp_no AND s.salary > 1500000
+       GROUP BY e.emp_no;
+```
+
+`Duplicated Weedout` 알고리즘은 원본 쿼리를 `INNER JOIN + GROUP BY` 절로 바꿔서 실행하는 것과
+
+**동일한 작업으로 쿼리를 처리**한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/d57817ab-3ef5-4f86-b228-ff09dea03722)
+
+위의 그림은 `Duplicated Weedout` 알고리즘으로 예제 쿼리를 처리하는 과정이다.
+
+1. `salaries` 테이블의 `ix_salary` 인덱스를 스캔해서 `salary`가 1500000보다 큰 사원을 검색해 **employees 테이블 조인을 실행**한다.
+2. 조인된 결과를 `임시 테이블`에 저장한다.
+3. 임시 테이블에 저장된 결과에서 `emp_no` 기준으로 **중복을 제거**한다.
+4. `중복`을 제거하고 남은 레코드를 **최종적으로 반환**한다.
+
+`Duplicate Weedout` 최적화를 이용한 실행 계획은 다음과 같다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/f51c8676-c937-44c4-8c47-5c9c7e959816)
+
+Extra 컬럼에 `“Strat Temporary”`와 `“End Temporary”` 문구가 표시된 것을 볼 수 있다.
+
+`“Duplicate Weedout”` 이라는 문구는 표시되지 않는다.
+
+`Start/ End temporary` 문구의 구간이 **Duplicate Weedout 최적화 처리 과정**이라고 보면 된다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/b2ee4e47-e736-46c1-aa45-cf87d0a35252)
+
+`Duplicate Weedout` 최적화 역시 제약 사항과 장점이 동시에 존재한다.
+
+- 서브 쿼리가 `상관 서브쿼리`라고 하더라도 사용할 수 있다.
+- 서브쿼리가 `GROUP BY`나 `집합 함수`가 사용된 경우에는 사용할 수 없다.
+- `서브쿼리`의 테이블을 조인으로 처리하기 때문에 **최적화할 수 있는 방법이 많다.**
+
+### 👍🏼 컨디션 팬아웃(condition_fanout_filter)
+
+- `조인`을 실행할 때 테이블의 순서는 **쿼리의 성능에 매우 큰 영향**을 미친다.
+- `옵티마이저`는 여러 테이블이 조인되는 경우 가능하다면 **일치하는 레코드 건수가 적은 순서대로 조인을 실행**한다.
+
+```sql
+mysql> SELECT * 
+       FROM employees e
+         INNER JOIN salaries s ON s.emp_no=e.emp_no
+       WHERE e.first_name='Matt'
+         AND e.hire_date BETWEEN '1985-11-21' AND '1986-11-21'
+```
+
+이 쿼리를 `condition_fanout_filter` 옵티마이저 옵션을 비활성화 하고 `실행 계획`을 보자.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/325d5e7f-b9a9-432d-9915-c61eb4288c5a)
+
+이 `실행 계획`을 통해 이 쿼리가 어떻게 실행될지 예측할 수 있다.
+
+1. `employees` 테이블에서 `ix_firstname` 인덱스를 이용해 **first_name=’Matt’** 조건에 일치하는 `233건`의 레코드를 검색한다.
+2. 검색된 `233건`의 레코드 중에서 `hire_date`가 **‘1985-11-21’ 부터 ‘1986-11-21’일 사이**인 레코드만 걸러내는데, 실행 계획을 보면 `옵티마이저`가 **233건 모두 hire_date 컬럼의 조건을 만족할 것으로 예측**했다.
+3. `employees` 테이블을 읽은 결과 `233건`에 대해 `salaries` 테이블의 `PK`를 이용해 `salaries` 테이블의 레코드를 읽는다. 옵티마이저는 `employees` 테이블의 레코드 한 건당 salaires 테이블의 레코드 10건이 일치할 것으로예상했다.
+
+여기서 핵심은 `employees` 테이블의 `rows` 컬럼의 값이 `233`이고, `filtered` 컬럼 값이 `100%`라는 것이다.
+
+`condition_fanout_filter` 최적화를 다시 활성화해서 실행 계획을 조회해보자.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/50f06eb7-388d-4997-9fc7-dce0b182f688)
+
+`rows 컬럼`의 값은 `233`으로 같지만, `filtered` 컬럼의 값이 `26.03`으로 변경된 것을 알 수 있다.
+
+`옵티마이저`는 인덱스를 사용할 수 있는 `first_name` 컬럼 조건 이외의 나머지 조건에 대해서도 얼마나
+
+`조건`을 `충족`할지를 고려했다는 이야기가 된다.
+
+즉, `옵티마이저`가 조건을 만족하는 `레코드 건수`를 정확하게 예측할 수 있다면 **더 빠른 실행 계획**을 만들 수 있다.
+
+그렇다면  `filtered` 컬럼의 값을 어떻게 예측해내는 것일까?
+
+`8.0 버전`에서는 `condition_fanout_filter` 최적화가 활성화되면 다음과 같은 조건을 만족하는 컬럼의 
+
+조건들에 대해 조건을 만족하는 `레코드`의 **비율을 계산**할 수 있다.
+
+1. `WHERE 조건절`에 사용된 컬럼에 대해 **인덱스가 있는 경우**
+2. `WHERE 조건절`에 사용된 컬럼에 대해 **히스토그램이 존재하는 경우**
+
+실제 쿼리를 실행하면 `ix_fristname` 인덱스만 사용한다.
+
+하지만 `실행 계획`을 수립할 때는 `first_name` 컬럼의 인덱스를 이용해 조건에 일치하는 레코드 건수가
+
+대략 **233건** 정도라는 것을 알아낸다.
+
+`hire_date` 조건을 만족하는 레코드의 비율이 대략 `26.03%`일 것으로 예측했는데,
+
+`hire_date` 컬럼에 인덱스가 없었다면 `옵티마이저`는 `first_name` 컬럼의 인덱스를 이용해 `hire_date` 
+
+컬럼 값의 분포도를 살펴보고 **filtered 컬럼의 값을 예측**한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/b761bb1e-34e0-4192-91ad-4f7b4c4020b4)
+
+`condition_fanout_filter` 최적화 기능은 쿼리의 실행 계획 수립에 **더 많은 시간과 컴퓨팅 자원을 소모**한다.
+
+따라서, `쿼리` 실행 계획이 잘못된 선택을 한 적이 별로 없다면 `성능 향상`에 도움이 되지 않을 수 있다.
+
+`MySQL 서버`가 처리하는 쿼리의 빈도가 매우 높다면 `실행 계획 수립`에 추가되는 `오버헤드`가 더 클 수 있으므로
+
+**업그레이드 하기 전 성능 테스트**를 하는 것이 좋다.
+
+### 🌐 파생 테이블 머지(derived_merge)
+
+예전 버전의 `MySQL 서버`에서는 다음과 같이 `FROM` 절에 사용된 서브쿼리는 먼저 실행해서
+
+그 결과를 **임시 테이블로 만든 다음 외부 쿼리 부분을 처리**했다.
+
+```sql
+mysql> EXPLAIN
+       SELECT * FROM (
+         SELECT * FROM employees WHERE first_name='Matt'
+       ) derived_table
+       WHERE derived_table.hire_date='1986-04-03';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/daa17835-1305-494b-a580-5bfc82f7dd01)
+
+실행 계획을 보면 `employees` 테이블을 읽는 라인의 `select_type`이 `DERIVED`라고 표시된다.
+
+`employees` 테이블에서 `where` 조건에 맞는 레코드들만 읽어서 임시 테이블을 만든 것이다.
+
+그 다음 임시 테이블을 다시 읽고 `hire_date` 컬럼의 값이 `‘1986-04-03’`인 레코드만 걸러내어 
+
+반환한 것이다. 그래서 `FROM` 절에 사용된 서브 쿼리를 `파생 테이블(Derived Table)`이라고 부른다.
+
+`임시 테이블`을 생성하고 데이터를 `INSERT` 한 뒤 다시 읽기 때문에, 레코드를 복사하고 읽는
+
+`오버헤드`가 더 추가되게 된다.
+
+`임시 테이블`이 메모리에 상주할 수 있다면 다행이지만 `레코드`가 많아서 디스크에 써야 하는 상황이 
+
+온다면 `쿼리`의 `성능`이 많이 느려질 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/7a3f78d1-e175-4755-881e-3ec3c5af35ab)
+
+`MySQL 5.7` 버전부터는 파생 테이블로 만들어지는 `서브쿼리`를 외부 쿼리와 병합해서 서브쿼리 부분을
+
+제거하는 **최적화가 도입**되었다.
+
+`derived_merge` 최적화 옵션은 임시 테이블 최적화를 활성화할지 여부를 결정한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/e9ff4efc-e946-4099-8249-f786a467c08e)
+
+실행 계획을 살펴보면 `select_type` 컬럼이 `SIMPLE`로 변경되었다.
+
+`SHOW WARNINGS` 명령으로 `옵티마이저`가 **새로 작성한 쿼리**를 살펴보면 아래와 같다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/44b53b9d-a70d-454d-a944-637d50f88faf)
+
+구 버전의 `MySQL 서버`에서는 **서브쿼리로 작성된 쿼리를 외부 쿼리로 병합하는 작업**을 대부분 `수작업`으로 처리했었다.
+
+`옵티마이저`가 처리 할 수 있는 쿼리를 굳이 `수작업`으로 처리해 줄 필요는 없어졌지만
+
+모든 `쿼리`에 대해 `옵티마이저`가 서브쿼리를 외부 쿼리로 병합할 수 있는 것은 아니다.
+
+아래와 같은 조건들은 자동으로 `서브쿼리`를 `외부 쿼리`로 병합할 수 없기 때문에, 수동으로 병합해서
+
+작성하는 것이 **쿼리의 성능에 도움**이 될 것이다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/ea62ca0a-aa54-4988-a596-dd0e7f3f7d7d)
+
+### 😝 인비저블 인덱스(use_invisible_indexes)
+
+- 8.0 버전부터 `인덱스`의 **가용 상태를 제어할 수 있는 기능**이 추가 되었다.
+- 8.0 이전까지는 `인덱스`가 존재하면 `옵티마이저`는 **항상 인덱스를 검토하고 사용**해왔다.
+- 8.0 버전부터는 `인덱스`를 삭제하지 않고, `인덱스`를 사용하지 못하게 **제어하는 기능을 제공**한다.
+
+`인덱스`의 **가용 상태**는 아래와 같은 `명령어`로 변경할 수 있다.
+
+```sql
+ALTER TABLE ... ALTER INDEX ... [VISIBLE | INVISIBLE]
+```
+
+`employees` 테이블의 인덱스 가용 상태를 변경해보자
+
+```sql
+-- 옵티마이저가 ix_hiredate 인덱스를 사용하지 못하게 변경
+mysql> ALTER TABLE employees ALTER INDEX ix_hiredate INVISIBLE;
+
+-- 옵티마이저가 ix_hiredate 인덱스를 사용할 수 있게 변경
+mysql> ALTER TABLE employees ALTER INDEX ix_hiredate VISIBLE;
+```
+
+`use_invisible_indexes` 옵션을 사용하면 `INVISIBLE` 상태를 가진 인덱스라고 하더라도
+
+**옵티마이저가 사용할 수 있도록 제어**할 수 있다.
+
+```sql
+-- use_invisible_indexes의 기본 값은 off 이다.
+mysql> SET optimizer_switch='use_invisible_indexes=on';
+```
+
+### 😿 스킵 스캔(skip_scan)
+
+- `인덱스`의 핵심은 값이 정렬되어 있다는 것이기 때문에, `인덱스`를 구성하는 **컬럼의 순서가 중요**하다.
+- `인덱스 스킵 스캔`은 제한적이지만 인덱스의 **제약 사항을 뛰어넘을 수 있는 최적화 기법**이다.
+
+먼저 `employees` 테이블에 인덱스를 생성해서 간단한 테스트를 해보자.
+
+```sql
+mysql> ALTER TABLE employees
+        ADD INDEX ix_gender_birthdate (gender, birth_date);
+```
+
+이 인덱스를 사용하려면 `where` 조건절에 `gender` 컬럼에 대한 비교 조건이 필수적이다.
+
+```sql
+-- 인덱스를 사용하지 못하는 쿼리 -> gender 컬럼에 대한 비교 없음
+mysql> SELECT * FROM employees WHERE birth_date>='1965-02-01';
+
+-- 인덱스를 사용하는 쿼리 -> gender 컬럼에 대한 비교 있음
+mysql> SELECT * FROM employees WHERE gender='M' AND birth_date>='1965-02-01';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/d4f3db48-afa1-4c1a-a74b-1a164fb7e1bf)
+
+`선행 컬럼`에 대한 비교가 없는 첫 번째 쿼리는 인덱스를 사용할 수 없으므로, 이런 경우에는
+
+`birth_date` 컬럼부터 시작하는 **인덱스를 생성**해야 했다.
+
+8.0 버전부터는 `인덱스 스킵 스캔` 최적화가 도입되어, 인덱스의 **선행 컬럼이 조건절에 사용되지 않아도**
+
+`후행 컬럼`의 조건만으로도 **인덱스를 이용한 쿼리 성능 개선**이 가능하다.
+
+`인덱스 스킵 스캔`은 첫 번째 쿼리를 `gender 컬럼`의 조건이 있는 것 처럼 쿼리를 `최적화`한다.
+
+만약 `인덱스`의 **선행 컬럼이 매우 다양한 값을 가지는 경우에는 인덱스 스킵 스캔이 비효율적**이다.
+
+따라서, `옵티마이저`는 인덱스의 선행 컬럼이 소수의 `유니크`한 값을 가질 때만 `인덱스 스킵 스캔` 최적화 사용한다.
+
+```sql
+-- 현재 세션에서 인덱스 스킵 스캔 최적화를 활성화
+mysql> SET optimizer_switch='skip_scan=on';
+
+-- 현재 세션에서 인덱스 스킵 스캔 최적화를 비활성화
+mysql> SET optimizer_switch='skip_scan=off';
+
+-- 특정 테이블에 대해 인덱스 스킵 스캔을 사용하도록 힌트를 사용
+mysql> SELECT /*+ SKIP_SCAN(employees)*/ COUNT(*)
+       FROM employees
+       WHERE birth_date>='1965-02-01';
+       
+
+-- 특정 테이블과 인덱스에 대해 인덱스 스킵 스캔을 사용하도록 힌트를 사용
+mysql> SELECT /*+ SKIP_SCAN(employees ix_gender_birthdate)*/ COUNT(*)
+       FROM employees
+       WHERE birth_date>='1965-02-01';
+       
+
+-- 특정 테이블에 대해 인덱스 스킵 스캔을 사용하지 않도록 힌트를 사용
+mysql> SELECT /*+ NO_SKIP_SCAN(employees)*/ COUNT(*)
+       FROM employees
+       WHERE birth_date>='1965-02-01';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/e546a35c-9211-484e-aa6c-0883785403e9)
+
+`인덱스 스킵 스캔`을 사용하도록 `옵티마이저`에게 힌트를 주었을 때,
+
+`Extra` 컬럼에 **Using index for skip scan**이 표시되는 것을 볼 수 있다.
+
+### 😄 해시 조인(hash_join)
+
+- `8.0.18` 버전부터 MySQL 서버도 `해시 조인`이 추가 지원되기 시작했다.
+
+`해시 조인`이 항상 `Nested Loop Join` 보다 **빠를 거라는 기대**를 대부분의 사용자가 가지고 있다.
+
+하지만 이는 항상 `옳은 이야기`는 아니다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/1050aa63-7fbf-437c-b4cf-60aeb3ab44ce)
+
+`Nested Loop Join`과 해시 조인은 같은 지점에서 시작했지만, `해시 조인`이 먼저 끝나는 것을 볼 수 있다.
+
+`조인 조건`에 `일치`하는 `마지막 레코드`를 찾았다고 해서 **항상 쿼리가 완료되는 것은 아니다.**
+
+`해시 조인`은 첫 번째 레코드를 찾는 데 시간이 많이 걸리지만, 최종 레코드를 찾는 데는 시간이 많이 걸리지 않는다.
+
+`Nested Loop Join`은 첫 번째 레코드를 빨리 찾고, `최종 레코드`를 찾는데 시간이 많이 걸린다.
+
+`해시 조인 쿼리`는 **Best Throughput** 전략에 적합하고, `Nested Loop Join`은 **Best-Respose-time** 전략에 적합하다.
+
+일반적인 `웹 서비스`는 **응답 속도**가 더 중요하고, `분석`과 같은 서비스는 **처리 소요 시간**이 중요하다.
+
+`MySQL 서버`는 대부분 `온라인 트랜잭션 처리`를 위해 사용되기 때문에, **응답 속도에 더 집중**한다.
+
+따라서, `조인 조건`의 `컬럼`이 `인덱스`가 없거나 조인 대상 테이블 중 일부의 **레코드 건수가 매우 적은 경우** 등에 대해서만 **해시조인 알고리즘을 사용**한다.
+
+`MySQL 서버`의 해시 조인 최적화는 **Nested Loop Join이 사용되기에 적합하지 않은 경우**를 위한
+
+`차선책` 정도로 생각하는 것이 좋다.
+
+`8.0.17` 버전까지는 조인 조건이 좋지 않은 경우 **Block Nested Loop 조인 알고리즘을 사용**했다.
+
+인덱스가 잘 설계된 `데이터베이스`에서는 **Block Nested Loop 실행 계획**은 거의 볼 수 없었다.
+
+여기서 `“블록”`이란 `join_buffer_size`라는 시스템 변수로 크기를 조정할 수 있는 메모리 공간을 의미한다.
+
+`조인 대상 테이블`의 레코드 크기가 `조인 버퍼`보다 크다면 **드라이빙 테이블을 여러 번 반복해서 읽어야 하는 문제가 발생**한다.
+
+`8.0.18(8.0.19)` 버전에서는 `동등 조인`을 위해서는 **해시 조인**이 사용되고,
+
+`안티 조인`이나 `세미 조인`을 위해서는 **블록 네스티드 루프 조인**이 사용되었다.
+
+`8.0.20` 버전부터는 **블록 네스티드 루프 조인**은 더이상 사용되지 않고, `네스티드 루프 조인`을 사용될 수 없는 경우 항상 **해시 조인이 사용**되도록 바뀌었다.
+
+`8.0.20` 버전부터는 `block_nested_loop` 옵티마이저 설정이나, `BNL` 또는 `NO_BNL` 힌트 등으로
+
+`블록 네스티드 루프`가 아닌 **해시 조인을 유도하는 목적으로 사용**한다.
+
+`INDEX 힌트`로 인덱스를 사용하지 못하게 하면 `쿼리`가 어떻게 `실행`되는지 확인해보자
+
+```sql
+mysql> EXPLAIN
+       SELECT * 
+       FROM employees e IGNORE INDEX(PRIMARY, ix_hiredate)
+        INNER JOIN dept_emp de IGNORE INDEX(ix_empno_fromdate, ix_fromdate)
+         ON de.emp_no=e.emp_no AND de.from_date=e.hire_date;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/8621153a-d824-46ec-9926-77d6af433381)
+
+`옵티마이저`는 적절한 인덱스가 없으므로 `해시 조인`을 사용하는 것을 볼 수 있다.
+
+일반적으로 `해시 조인`은 **빌드 단계**와 **프로브 단계**로 나뉘어 처리된다.
+
+`빌드 단계`에서는 `조인 대상 테이블` 중에서 **레코드 건수가 적어서 해시 테이블로 만들기 용이한 테이블**을
+
+골라서 `메모리`에 **해시 테이블을 생성**하는 작업을 수행한다.
+
+`프로브 단계`는 나머지 테이블의 레코드를 읽어서 `해시 테이블`의 **일치 레코드를  찾는 과정**을 의미한다.
+
+이 `실행 계획`으로는 어느 테이블이 `빌드 테이블`이고 `프로브 테이블`인지 식별하기 어렵다.
+
+이런 경우에는 `EXPLAIN FORMAT`을 **TREE**로 주거나 `EXPLAIN ANALYZE` **명령을 사용**하면 좋다.
+
+```sql
+mysql> EXPLAIN FORMAT=TREE
+       SELECT * 
+       FROM employees e IGNORE INDEX(PRIMARY, ix_hiredate)
+        INNER JOIN dept_emp de IGNORE INDEX(ix_empno_fromdate, ix_fromdate)
+         ON de.emp_no=e.emp_no AND de.from_date=e.hire_date;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/152cf271-2006-4f2e-9b87-97629c3d98b3)
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/deac5533-5047-4454-8d92-0816abff68a2)
+
+`TREE 포맷`의 실행 계획 기준으로 보면, `최하단` 제일 안쪽의 `dept_emp` 테이블이 **빌드 테이블로 선택** 된 것을 볼 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/05e8888f-2ac1-48ff-9ffb-8b62bb79b9bd)
+
+이 그림은 `조인 버퍼`의 공간이 적당한 **일반적인 해시 조인의 처리 과정**을 보여준다.
+
+`해시 테이블`을 메모리에 저장할 때 `조인 버퍼`의 공간이 부족한 경우, `빌드 테이블`과 `프로브 테이블`을
+
+적당한 크기의 **청크로 분리한 다음, 청크별로 해시 조인을 처리**한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/41462d5b-8cb9-4d06-96bf-93057bc0435e)
+
+이 그림을 보면, `해시 조인` 처리 방법이 복잡해보인다.
+
+만들어질 `해시 테이블`이 설정 된 `메모리 크기`보다 큰지를 알 수 없기 때문에 이와 같이 처리된다.
+
+`MySQL 서버`는 `dept_emp` 테이블을 읽으면서 **메모리의 해시 테이블을 준비**하다가 지정된 메모리 크기를 넘어서면 `dept_emp 테이블`의 **나머지 레코드를 디스크에 청크로 구분해서 저장**한다.
+
+그리고 `employees` 테이블의 `emp_no` 값을 이용해 메모리의 `해시 테이블`을 검색해서 1차 조인 결과를 생성한다.
+
+동시에 `employees` 테이블에서 **읽은 레코드를 디스크에 저장**한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/a25e57f5-5163-41ec-9fdd-29809a44a37a)
+
+이 그림을 보면, `디스크`에 **2개의 그룹으로 구분된 청크 목록**이 표현되어 있다.
+
+`빌드 테이블 청크`는 **dept_emp의 레코드를 저장**하고 `프로브 테이블 청크`는 **employees의 레코드를 저장**하는 공간이다.
+
+`1차 조인`이 완료되면, 디스크에 저장된 `빌드 테이블 청크`에서 첫 번째 청크를 읽어서 `메모리 해시 테이블`을 구축하고, `프로브 테이블 청크`에서 새로 구축된 메모리 `해시 테이블`과 `조인`을 수행 후 **2차 결과를 반환**한다.
+
+`MySQL 서버`는 청크 단위로 조인을 수행하기 위해서 `2차 해시 함수`를 이용한다.
+
+`옵티마이저`는 **빌드 테이블의 크기에 따라서 다양한 해시 조인 알고리즘을 사용**한다.
+
+`메모리`에서 모두 처리 `가능`한 경우에는 **클래식 해시 조인 알고리즘**을 사용하고,
+
+`메모리`에서 모두 처리가 `불가능`하면 **그레이스 해시 조인 알고리즘**을 **하이브리드**하게 활용한다.
+
+`해시 조인`에서 해시 키를 만들 때 `xxHash64` 함수를 사용하는데, 이 함수는 매우 빠르고 해시된 값의 분포도도 훌륭한 `알고리즘`이다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/3254effe-32aa-415a-a70e-dab125af64bf)
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/91002a87-d15d-4bee-947d-e85da845e7f9)
+
+### 🤩 인덱스 정렬 선호(prefer_ordering_index)
+
+- `MySQL 옵티마이저`는 **ORDER BY 또는 GROUP BY**를 `인덱스`를 `사용`해 처리할 수 있다면 쿼리의 실행 계획에서 **인덱스의 가중치를 높이 설정**해서 `실행`한다.
+
+```sql
+mysql> EXPLAIN
+       SELECT *
+       FROM employees
+       WHERE hire_date BETWEEN '1985-01-01' AND '1985-02-01'
+       ORDER BY emp_no;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/3a90b085-c9b8-4aee-a9e0-3b6b43ceaac2)
+
+이 쿼리는 대표적으로 `2가지` 실행 계획이 `선택 가능`하다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/1a2617c4-381c-42b7-bfbd-d5aa7397bef5)
+
+상황에 따라 1번이 효율적일 수도 있고 2번이 효율적일 수도 있다.
+
+`hire_date` 컬럼의 **조건에 부합되는 레코드 건수**가 많지 않다면 `1번`이 `효율`적일 것이다.
+
+`옵티마이저`는 현재 2번 실행계획을 선택하고 있다.
+
+`옵티마이저`가 체크해야 하는 레코드 건수가 많음에도 불구하고 **잘못된 실행 계획을 선택**했다.
+
+`옵티마이저`가 `ORDER BY`를 위한 인덱스에 너무 가중치를 줘서 실수를 자주 한다면
+
+**두 가지 방법으로 개선**할 수 있다.
+
+**MySQL 8.0.20 이전 버전**
+
+- 특정 인덱스를 사용하지 못하도록 `“IGNORE INDEX”` 힌트 사용
+
+**MySQL 8.0.21 버전 ~**
+
+- `prefer_ordering_index` 옵티마이저 옵션 **비활성화**
+
+```sql
+-- 현재 커넥션에서만 prefer_ordering_index 옵션 비활성화
+mysql> SET SESSION optimizer_switch='prefer_ordering_index=OFF';
+
+-- 현재 쿼리에 대해서만 prefer_ordering_index 옵션 비활성화
+mysql> SELECT /*+ SET_VAR(optimizer_switch='prefer_ordering_index=OFF') */
+```
+
+### 🤓 조인 최적화 알고리즘
+
+- `테이블`의 개수가 많아지면 최적화된 `실행 계획`을 찾는 것이 상당히 어려워진다.
+- 하나의 `쿼리`에서 조인되는 테이블의 개수가 많아지면 `실행 계획`을 수립하는 데만 몇 분이 걸릴 수 있다.
+
+`MySQL`에는 최적화된 조인 실행 계획 수립을 위한 `2가지` 알고리즘이 있다.
+
+```sql
+mysql> SELECT *
+       FROM t1, t2, t3, t4
+       WHERE ...
+```
+
+이 `쿼리`가 `알고리즘`에 따라서 어떻게 처리되는지 확인해보자.
+
+### 😅 Exhaustive 검색 알고리즘
+
+- `MySQL 5.0` 버전과 그 이전 버전에서 사용되던 `조인 최적화 기법`이다.
+- `FROM 절`에 명시된 모든 테이블의 조합에 대해 **실행 계획의 비용을 계산해서 최적의 조합 1개를 찾는 방법**이다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/7c5782a0-c464-43bb-9b41-e02b703b7edd)
+
+예를 들어 테이블이 `20`개라면 이 방법으로 처리했을 경우 가능한 조인 조합이 `20 factorial`에 달한다.
+
+이전 버전에서 사용되던 `알고리즘`은 테이블이 10개만 넘어도 **실행 계획 수립에 많은 시간이 걸린다.**
+
+### 😱 Greedy 검색 알고리즘
+
+- `Exhaustive` 알고리즘의 **시간 소모적인 문제를 해결**하기 위해 `5.0 버전` 부터 도입되었다.
+- `Exhaustive` 알고리즘보다는 **조금 복잡한 형태로 최적의 조인 순서를 결정**한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/0efc31b2-1cd8-4b74-a5fd-34b0ce3c01ea)
+
+`Greedy` 검색 알고리즘으로 `t1~t4` 테이블의 조인을 처리하면 아래와 같은 방식으로 처리된다.
+
+1. 전체 `N개`의 테이블 중에서 `optimizer_search_depth` 시스템 변수에 정의된 개수의 테이블로 가능한 조인 조합을 생성한다.
+2. 1번에서 생성된 `조인 조합` 중에서 **최소 비용의 실행 계획을 하나 선정**한다.
+3. 선정된 `실행 계획`의 첫 번째 테이블을 부분 실행 계획의 `첫 번째 테이블`로 선정한다.
+4. 전체 `N-1개`의 테이블 중 `optimizer_search_depth` 시스템 변수에 정의된 개수의 테이블로 가능한 조인 조합을 생성한다.
+5. 생성된 `조인 조합`들을 하나씩 3번에서 생성된 **부분 실행 계획에 대입해 실행 비용을 계산**한다.
+6. 최적의 `실행 계획`에서 두 번째 테이블을 부분 실행 계획의 `두 번째 테이블`로 선정한다.
+7. 남은 테이블이 모두 없어질 때까지 `4~6번` 과정을 반복하면서 **부분 실행 계획에 테이블 조인 순서를 기록**한다.
+8. 최종적인 `부분 실행 계획`이 테이블의 `조인 순서`로 결정된다.
+
+`Greedy` 검색 알고리즘은 `optimizer_search_depth` 시스템 변수에 설정된 값에 따라 조인 최적화의 비용이 상당히 줄어들 수 있다. 
+
+`MySQL`에서는 조인 최적화를 위한 시스템 변수로 `optimizer_prune_level`과 `optimizer_search_depth`를 제공된다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/725d6002-7f2b-4c8d-af20-1884aa2062d4)
+
+`테이블 조인`이 많은 쿼리의 `실행 계획` 수립이 얼마나 느려질 수 있는지,
+
+`조인 최적화`를 위한 `시스템 변수`를 조정해서 얼마나 빨라질 수 있는지 살펴보자.
+
+`테스트`를 위해 아래와 같은 `스펙`의 테이블을 **tab01~tab30** 까지 `30개` 생성한다.
+
+이 중 몇 개의 테이블은 `INT`와 `BIGINT` 타입의 컬럼을 가지고 몇 개의 테이블은 `보조 인덱스`를 제거했다.
+
+테이블당 `2000개` 정도의 데이터를 `INSERT` 한 상태라고 가정하자.
+
+```sql
+mysql> CREATE TABLE tab01(
+         fd1 char(20) NOT NULL,
+         fd2 char(20) DEFAULT NULL,
+         PRIMARY KEY (fd1),
+         KEY ix_fd2 (fd2)
+       );
+```
+
+이제 `쿼리`의 실행 계획을 확인해보자.
+
+```sql
+
+mysql> SET SESSION optimizer_prune_level = {0 | 1};
+mysql> SET SESSION optimizer_search_depth = { 1 | 5 | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 62 };
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/47372ae0-3cb4-4f03-98aa-995271ffd7fb)
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/a54ed627-2159-4ff6-94de-173fd1c8a81c)
+
+
+위 쿼리의 `실행 계획 수립`에 걸린 시간은 `0.01`초 정도 소요되었다.
+
+`MySQL` 5.1 버전에서는 조인 순서 결정에 `Heuristic` 최적화를 적용해도 `optimizer_search_depth` 변수 값이 증가하면 `실행 계획 수립`에 `1초` 넘는 시간이 걸렸다.
+
+결과적으로, `MySQL` 서버의 **조인 최적화나 딕셔너리 정보 검색 성능이 버전이 올라감에 따라 많이 개선**되었다.
+
+`optimizer_prune_leve`l 세션 변수의 값을 `0`으로 고정하고, `optimizer_search_depth` 변수의 값을 **1부터 5씩 증가시키면서 실행 계획 수립에 걸리는 시간을 확인**해봤다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/971d5c8b-2060-487c-ac29-87dd44c4cff2)
+
+`MySQL 8.0` 버전의 조인 최적화는 많이 개선되어 `optimizer_search_depth` 변수의 값에는 큰 영향을 받지 않는다. 하지만 `optimizer_prune_level`을 `0`으로 설정하면 소요되는 시간이 급증한다.
+
+즉, `8.0` 버전에서는 조인 최적화와 관련된 `휴리스틱`을 비활성화 할 필요가 거의 없어졌다는 뜻이다.
+
+`optimizer_prune_level`의 기본 값은 `1`이므로 시스템 변수의 조정은 더 이상 필요하지 않을 것이다.
+
+### 🙃 쿼리 힌트
+
+- `MySQL` 서버는 우리가 서비스하는 비즈니스를 **100% 이해하지 못한다.**
+- 서비스 개발자나 `DBA`보다 `MySQL` 서버가 **부족한 실행 계획을 수립할 때가 있다.**
+
+MySQL 서버에서 사용 가능한 `쿼리 힌트`는 **두 가지**가 있다.
+
+- `인덱스 힌트`
+- `옵티마이저 힌트`
+
+인덱스 힌트는 `“USE INDEX”` 같은 힌트를 말하며, `옵티마이저 힌트`는 **5.6 버전부터 새롭게 추가**된
+
+힌트들을 의미한다. 
+
+### 😛 인덱스 힌트
+
+- `“STRAIGHT_JOIN”`과 `“USE INDEX”` 등은 **옵티마이저 힌트가 도입되기 전 사용되던 기능**들이다.
+- `인덱스 힌트`는 모두 SQL의 문법에 맞게 사용해야 하기 때문에 `ANSI-SQL 표준`에 **어긋난다는 단점**이 있다.
+
+`옵티마이저` 힌트들은 다른 `RDBMS`에서 주석으로 인식한다.
+
+따라서 `ANSI-SQL` 표준을 준수한다고 할 수 있으므로, 가능하다면 `옵티마이저 힌트`를 사용하는 것이 좋다.
+
+인덱스 힌트는 `SELECT` 명령과 `UPDATE` 명령에서만 사용이 가능하다.
+
+### 😡 STRAIGHT_JOIN
+
+- `STRAIGHT_JOIN`은 옵티마이저 힌트인 동시에 **조인 키워드**이기도 하다.
+- SELECT, UPDATE, DELETE 쿼리에서 여러 개의 테이블이 조인되는 경우 `조인 순서`를 `고정`하는 `역할`을 한다.
+
+```sql
+mysql> EXPLAIN
+       SELECT * 
+       FROM employees e, dept_emp de, departments d
+       WHERE e.emp_no=de.emp_no AND d.dept_no=de.dept_no;
+```
+
+이런 `쿼리`를 실행하면 어느 테이블이 `드라이빙 테이블`이 되고 어느 테이블이 `드리븐 테이블`일지 알 수 없다.
+
+`옵티마이저`가 각 테이블의 통계 정보와 `쿼리`의 `조건`을 기반으로 **조인 순서**를 정할 것이기 때문이다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/5ff5dbc0-02ca-473d-9087-c84ef14aab46)
+
+이 쿼리의 실행 계획을 보면, `departments` 테이블을 드라이빙 테이블로 선택했다.
+
+두 번째로 `dept_emp` 테이블을 읽고 마지막으로 `employees` 테이블을 읽었다.
+
+일반적으로 `조인`을 하기 위한 `컬럼`들의 인덱스 여부로 조인 순서가 결정되므로, `레코드`가 가장 적은 테이블인
+
+`departments` 테이블이 **드라이빙 테이블로 선택**되었다.
+
+이 쿼리의 조인 순서를 변경하려면 `STRAIGHT_JOIN` 힌트를 사용할 수 있다.
+
+`인덱스 힌트`는 사용해야 하는 위치가 이미 결정되었으므로 **다른 위치에서 사용하면 안된다.**
+
+```sql
+mysql> SELECT STRAIGHT_JOIN
+         e.first_name, e.last_name, d.dept_name
+       FROM employees e, dept_emp de, departments d
+       WHERE e.emp_no=de.emp_no
+         AND d.dept_no=de.dept_no;
+         
+
+mysql> SELECT /*! STRAIGHT_JOIN */
+         e.first_name, e.last_name, d.dept_name
+       FROM employees e, dept_emp de, departments d
+       WHERE e.emp_no=de.emp_no
+         AND d.dept_no=de.dept_no;
+```
+
+`STRAIGHT_JOIN` 힌트는 `옵티마이저`가 **FROM 절에 명시된 테이블의 순서대로 조인을 수행하도록 유도**한다.
+
+**employees → dept_emp → departments** 순서로 조인을 수행한다는 것을 알 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/c78b774d-c21a-4c24-b91a-9b75f855ea41)
+
+주로 아래의 기준에 맞게 `조인 순서`가 결정되지 않는 경우에만 `STRAIGHT_JOIN` 힌트를 사용하여
+
+조인 순서를 조정해주는 것이 좋다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/e170807f-0b0e-4240-85c4-6912ee718e37)
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/1181f9d7-fe18-44af-9a76-2c83a84d067a)
+
+여기서 `레코드 건수`라는 것은 인덱스를 사용할 수 있는 `WHERE 조건`까지 포함해서 조건을 만족하는 
+
+레코드의 수를 의미하는 것이지, **테이블 전체의 레코드 수를 의미하는 것은 아니다.**
+
+예를 들어, `employees` 테이블의 레코드 건수가 훨씬 많지만 조건을 만족하는 레코드의 건수는 적다면
+
+실행계획을 살펴보고 `employees` 테이블을 `드라이빙`되게 하는 것이 좋다.
+
+```sql
+mysql> SELECT 
+         e.first_name, e.last_name, d.dept_name
+       FROM employees e, departments d, dept_emp de
+       WHERE e.emp_no=de.emp_no
+         AND d.dept_no=de.dept_no
+         AND e.emp_no=10001;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/d5ea406e-33a1-4a7e-8ec6-833a9ab16b5a)
+
+`STRAIGHT_JOIN` 힌트를 적용했을 때와 하지 않았을 때 모두 `employees` 테이블을 드라이빙 테이블로
+
+선택하는 것을 볼 수 있다.
+
+`STRAIGHT_JOIN` 힌트와 비슷한 역할을 하는 `옵티마이저 힌트`는 아래와 같은 것들이 있다.
+
+- **JOIN_FIXED_ORDER**
+- **JOIN_ORDER**
+- **JOIN_PREFIX**
+- **JOIN_SUFFIX**
+
+`JOIN_FIXED_ORDER` 옵티마이저 힌트는 `STRAIGHT_JOIN`과 완전히 같은 효과를 낸다.
+
+나머지 3개의 `옵티마이저 힌트`는 **일부 테이블의 조인 순서에 대해서만 제안하는 힌트**다.
+
+### 😾 USE INDEX / FORCE INDEX / IGNORE INDEX
+
+- 조인의 순서를 변경하는 것 다음으로 **자주 사용**되는 것이 `인덱스 힌트`이다.
+- `STRAIGHT_JOIN` 힌트와는 달리 인덱스 힌트는 사용하려는 `인덱스`를 가지는 **테이블 뒤에 힌트를 명시**해야 한다.
+
+`MySQL 옵티마이저`는 어떤 인덱스를 사용해야 할지를 **무난하게 잘 선택하는 편**이다.
+
+간혹 `3~4개` 이상의 컬럼을 포함하는 **비슷한 인덱스가 여러 개 존재하는 경우**에는 `옵티마이저`도 가끔 실수를 한다.
+
+이런 경우에는 강제로 `특정 인덱스`를 사용하도록 `힌트`를 `추가`해야 한다.
+
+`인덱스 힌트`는 크게 아래와 같이 3가지 종류가 있다. `인덱스 힌트`는 모두 키워드 뒤에 사용할 인덱스의 이름을
+
+괄호로 묶어서 사용하며 `힌트`의 **문법 오류**는 `쿼리 문법 오류`로 `처리`된다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/e1fef9f9-2541-42a4-80a5-e0184b9b76cd)
+
+별도로 사용자가 부여한 이름이 없는 PK는 `“PRIMARY”`라고 `명시`하면 된다.
+
+`인덱스 힌트`를 사용할 때 모두 용도를 명시해 줄 수 있고, 이는 `선택 사항`이다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/47d532b0-f5c9-4c80-8218-958a248cf8a7)
+
+`ORDER BY`나 `GROUP BY` 작업에서 인덱스를 사용할 수 있다면 나은 성능을 보장한다.
+
+용도는 대부분의 경우에 `옵티마이저`가 대부분 최적으로 선택하기 때문에 고려하지 않아도 괜찮다.
+
+```sql
+mysql> SELECT * FROM employees WHERE emp_no=10001;
+mysql> SELECT * FROM employees FORCE INDEX(primary) WHERE emp_no=10001;
+mysql> SELECT * FROM employees USE INDEX(primary) WHERE emp_no=10001;
+
+mysql> SELECT * FROM employees IGNORE INDEX(primary) WHERE emp_no=10001;
+mysql> SELECT * FROM employees FORCE INDEX(ix_firstname) WHERE emp_no=10001;
+```
+
+`첫 번째` 부터 `세 번째`까지의 쿼리는 **동일한 실행 계획으로 쿼리를 처리**한다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/cb3d59df-08f8-4a98-9e25-8cf8a5acc517)
+
+`옵티마이저`도 인덱스 힌트가 없어도 `조건절`을 보고 `PK`를 사용하는 것이 `최적`이라는 것을 `인식`하기 때문이다.
+
+`네 번째` 쿼리는 `인덱스`를 사용하지 못하도록 강제해서 **풀 테이블 스캔 실행계획이 수립**되는 것을 볼 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/6a15ecba-2a42-477c-b408-617510fc7e36)
+
+`다섯 번째` 쿼리도 **전혀 관계 없는 인덱스를 사용**하도록 했더니 `풀 테이블 스캔` 실행계획이 `수립`된다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/64807d81-6238-4e5c-8015-acb220fc631b)
+
+여기서 알 수 있는 것은, 터무니 없는 힌트를 주어도 `옵티마이저`가 이대로 실행 계획을 수립한다는 것이다.
+
+`전문 검색 인덱스`가 있는 경우에는 다른 일반 `보조 인덱스`를 사용할 수 있는 경우에도
+
+`옵티마이저`는 전문 검색 인덱스를 사용하는 경우가 많다.
+
+`인덱스`의 사용법이나 좋은 `실행 계획`이 어떤 것인지 판단하기 힘든 상황에서는 `힌트`를 사용해서
+
+강제로 `옵티마이저`의 실행 계획에 영향을 미치는 것은 좋지 않다.
+
+최적의 `실행 계획`은 데이터의 성격에 따라서 변하므로, 가능하다면 `옵티마이저`가 당시 `통계 정보`를 가지고
+
+**선택할 수 있도록 두는 것**이 가장 좋다.
+
+`쿼리`를 서비스에서 없애 버리거나 `튜닝`할 필요가 없게 **데이터를 최소화하는 것**이 `힌트`를 주는 것보다
+
+더 휼륭한 `최적화` 방법이다.
+
+마지막 방법은 `데이터 모델`의 단순화를 통해 `쿼리`를 간결하게 만드는 것인데, 이 세 가지 방법은
+
+`상당한 시간`과 `작업 능력`이 필요해서 **힌트에 의존하는 경우가 실무에서는 꽤 많다.**
+
+### 😛 SQL_CALC_FOUND_ROWS
+
+- `LIMIT`을 사용하면 `LIMIT`에 명시된 수만큼 만족하는 `레코드`를 찾으면 `검색 작업`을 멈춘다.
+- `SQL_CALC_FOUND_ROWS` 힌트가 포함된 쿼리는 `LIMIT`에 명시된 수 만큼 만족하는 레코드를 찾아도, 끝까지 검색을 수행한다.
+
+`SQL_CALC_FOUND_ROWS` 힌트가 사용된 쿼리가 실행된 경우, `FOUND_ROWS()` 함수를 이용해
+
+`LIMIT`을 제외한 **조건을 만족하는 레코드**가 전체 몇 건이었는지 알아 낼 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/11877662-75d3-4374-ac09-16457a769772)
+
+`페이징`에서 이 기능을 사용한다고 했을때 `적합한 방법`일지 검토하기 위해서
+
+`SQL_CALC_FOUND_ROWS`를 이용한 페이징 처리와 `COUNT(*)` 쿼리를 사용하는 예제를 비교해보자.
+
+- `SQL_CALC_FOUND_ROWS` 사용법
+
+```sql
+mysql> SELECT SQL_CALC_FOUND_ROWS * FROM employees WHERE first_name='Georgi' LIMIT 0, 20;
+mysql> SELECT FOUND_ROWS() AS total_record_count;
+```
+
+이 경우는 한 번의 `쿼리 실행`으로 필요한 정보 `2가지`를 가져오는 것 처럼 보이지만, `2번`의 `쿼리`가 나간다.
+
+`LIMIT 조건`이 처음 `20건`만 가져오도록 했지만 **힌트로 인해 조건에 만족하는 레코드 전부를 읽어야 한다.**
+
+현재 이 `조건`을 만족하는 레코드는 `253건`이므로 실제 `데이터 레코드`를 찾아가는 작업을 `253번` 수행해야 하며,
+
+`랜덤 I/O`가 **253번 일어난다.**
+
+- 기존 `2개`의 `쿼리`로 쪼개어 실행하는 방법
+
+```sql
+mysql> SELECT COUNT(*) FROM employees WHERE first_name='Georgi';
+mysql> SELECT * FROM employees WHERE first_name='Georgi' LIMIT 0, 20;
+```
+
+이 방식 또한 `쿼리`가 `2번` 나간다는 것은 같다.
+
+첫 번째 쿼리는 `실제 레코드 데이터`가 필요한 것이 아니므로 **랜덤 I/O는 발생하지 않는다.**
+
+두 번째 쿼리는 `ix_firstname` 인덱스를 `레인지 스캔`으로 접근한 뒤, 실제로 레코드를 읽어야 하기 때문에
+
+`랜덤 I/O`가 발생한다.
+
+이 쿼리는 `LIMIT 0, 20`의 제한이 있기 때문에 `20번`만 `랜덤 I/O`가 발생한다.
+
+이렇게 비교해 보았을 때 `SQL_CALC_FOUND_ROWS`를 사용하면 **성능에 좋지 않다는 것**을 알 수 있다.
+
+`SELECT` 쿼리 문장이 `UNION`으로 연결 된 경우에는 **정확한 레코드 건수를 가져올 수 없다는 문제점**도 존재한다.
+
+`SQL_CALC_FOUND_ROWS` 힌트는 성능이 아닌 **개발자의 편의를 위해 만들어진 힌트**다.
+
+따라서 `페이징 처리`는 적절한 `인덱스 튜닝`만 되어 있다면 **일반적인 방법이 더 성능이 좋다.**
+
+`인덱스`가 준비되지 않은 경우에는 `SQL_CALC_FOUND_ROWS`로 처리하는 것이 더 빠를 수 있으나,
+
+`쿼리`나 `인덱스`를 `튜닝` 하는 것이 훨씬 **더 빠른 결과를 만들어 낼 수 있을 것이다.**
+
+따라서, `SQL_CALC_FOUND_ROWS` 보다는 **레코드 카운터용 쿼리**와 **데이터를 조회하는 쿼리**를
+
+`분리`하는 것이 더 `효율적`이다.
+
+### 😛 옵티마이저 힌트 힌트 종류
+
+`옵티마이저 힌트`는 영향 범위에 따라 `4개 그룹`으로 나눠볼 수 있다.
+
+- `인덱스` : 특정 인덱스의 이름을 사용할 수 있는 옵티마이저 힌트
+- `테이블` : 특정 테이블의 이름을 사용할 수 있는 옵티마이저 힌트
+- `쿼리 블록` : 특정 쿼리 블록에서 사용할 수 있는 옵티마이저 힌트로서, 특정 쿼리 블록의 이름을 명시하는 것이 아니라 **힌트가 명시된 쿼리 블록에 대해서만 영향을 미치는 옵티마이저 힌트**
+- `글로벌(쿼리 전체)` : 전체 쿼리에 대해서 영향을 미치는 힌트
+
+이 `구분`으로 인해서 `힌트`의 `사용 위치`가 **달라지는 것은 아니다.**
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/cb2f1ef7-5e6c-4161-a168-58f11fffbac1)
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/b1dcc84b-ec07-4f16-b9e5-33e95c476c4a)
+
+모든 `인덱스` 수준의 힌트는 **반드시 테이블 명이 선행**되어야 한다.
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ INDEX(employees ix_firstname) */ *
+       FROM employees
+       WHERE first_name='Matt';
+       
+
+mysql> EXPLAIN
+       SELECT /*+ NO_INDEX(employees ix_firstname) */ *
+       FROM employees
+       WHERE first_name='Matt';
+```
+
+`옵티마이저 힌트`가 문법에 맞지 않게 잘못 사용된 경우에는 `경고 메시지`가 `표시`된다.
+
+익숙하지 않은 힌트 사용시 `EXPLAIN` 명령으로 힌트 `문법 오류`를 확인해보자.
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ NO_INDEX(ix_fristname) */ *
+       FROM employees
+       WHERE first_name='Matt';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/8b82487a-2643-4ec5-be78-cfe8803d09d1)
+
+어떤 `경고`가 있는지 확인해보자.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/ae3e3ce9-efc1-46d8-b0a5-486152bc5a98)
+
+`인덱스`를 가진 `테이블명`을 **명시하지 않아서 생긴 경고**이다.
+
+하나의 `SQL 문장`에서 `SELECT` 키워드는 **여러 번 사용될 수 있다.**
+
+이때 각 `SELECT` 키워드로 시작하는 `서브쿼리 영역`을 **쿼리 블록**이라고 한다.
+
+`특정 쿼리 블록`에 영향을 미치는 `옵티마이저 힌트`는 **외부 쿼리 블록에서 사용**할 수 있다.
+
+`특정 쿼리 블록`을 **외부 쿼리 블록**에서 사용하려면 `QB_NAME()` 힌트를 사용해서 **이름을 부여**해야 한다.
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ JOIN_ORDER(e, s@subq1) */
+         COUNT(*)
+       FROM employees e
+       WHERE e.first_name='Matt'
+         AND e.emp_no IN (SELECT /*+ QB_NAME(subq1) */ s.emp_no
+         FROM salaries s
+         WHERE s.salary BETWEEN 50000 AND 50500);
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/1662ff23-2c47-4c7c-b7ae-0a5d696a10d5)
+
+이 쿼리는 `서브쿼리`에 사용된 `salaries` 테이블이 `세미 조인 최적화`를 통해 **조인으로 처리될 것을 예상**하고
+
+`JOIN_ORDER` 힌트를 사용해서, 조인의 순서로 `외부 쿼리` 블록의 **employees 테이블**과 `서브쿼리` 블록의 
+
+**salaries** 테이블을 순서대로 `조인`하게 `힌트`를 `사용`한 `쿼리`이다.
+
+### 👿 MAX_EXECUTION_TIME
+
+- `옵티마이저 힌트` 중에서 유일하게 **쿼리의 실행 계획에 영향을 미치지 않는 힌트**이다.
+- `쿼리`의 **최대 실행 시간을 설정**하는 힌트로 사용되며, `밀리초 단위`로 **시간을 설정**한다.
+
+```sql
+mysql> SELECT /*+ MAX_EXECUTION_TIME(100) */ *
+       FROM employees
+       ORDER BY last_name LIMIT 1;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/85383ae5-42f2-4fd1-bb06-3f10ef87a59f)
+
+`쿼리`가 지정된 `시간`을 초과하면 **쿼리는 실패**하게 된다.
+
+### 🤣 SET_VAR
+
+- `MySQL 서버`의 **시스템 변수들 또한 쿼리의 실행 계획에 상당한 영향**을 준다.
+- `옵티마이저 힌트`로 `부족`한 경우 `optimizer_switch` 시스템 변수를 **제어해야 하는 경우도 생길 수 있다.**
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ SET_VAR(optimizer_switch='index_merge_intersection=off') */ *
+       FROM employees
+       WHERE first_name='Georgi' AND emp_no BETWEEN 10000 AND 20000;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/5cf10559-d244-4176-95ed-528696136e0c)
+
+`SET_VAR` 힌트는 실행 계획을 바꾸는 용도뿐만 아니라 `조인 버퍼`나 `정렬용 버퍼`의 크기를 일시적으로 
+
+증가시켜서 `대용량 처리` 쿼리의 **성능을 향상** 시킬 수도 있다.
+
+하지만 모든 `시스템 변수`를 `SET_VAR` 힌트로 조정할 수 없다.
+
+### ✌🏼 SEMIJOIN & NO_SEMIJOIN
+
+- `SEMIJOIN` 힌트는 **어떤 세부 전략을 사용할지 제어**할 수 있다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/04e92edc-aa35-4530-b2d0-501e87dd0d51)
+
+`Table Pull-out` 최적화 전략은 별도로 **힌트 사용이 불가능**하다.
+
+선택만 가능하다면 항상 `더 나은 성능`을 `보장`하기 때문이다. 
+
+```sql
+mysql> EXPLAIN
+       SELECT * 
+       FROM departments d
+       WHERE d.dept_no IN
+           (SELECT de.dept_no FROM dept_emp de);
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/9a659f76-00f9-4c7d-b40d-bafdd3cf60b3)
+
+현재 이 `쿼리`는 `Loose Scan` **최적화가 적용**되어 있는데 ,
+
+이 예제 `쿼리`가 다른 **세미 조인 최적화**를 사용하도록 변경해보자.
+
+**세미조인 최적화 힌트**는 외부 쿼리가 아니라 `서브 쿼리`에 `명시`해야 한다. 
+
+```sql
+mysql> EXPLAIN
+       SELECT * 
+       FROM departments d
+       WHERE d.dept_no IN
+           (SELECT /*+ SEMIJOIN(MATERIALIZATION) */ de.dept_no 
+           FROM dept_emp de);
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/7588483e-23dc-44ee-a624-7dab56ddfe39)
+
+`서브쿼리`에 쿼리 블록 이름을 명시하고 `세미 조인 힌트`는 **외부 쿼리 블록에 명시**하는 방법도 있다.
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ SEMIJOIN(@subq1 MATERIALIZATION) */ *
+       FROM departments d
+       WHERE d.dept_no IN
+           (SELECT /*+ QB_NAME(subq1) */ de.dept_no
+            FROM dept_emp de);
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/d7993e8b-d461-408d-8eed-754db0cfe2c0)
+
+특정 `세미 조인 최적화 전략`을 사용하지 않도록 `NO_SEMIJOIN` 힌트를 명시할 수 있다.
+
+```sql
+mysql> EXPLAIN
+       SELECT * 
+       FROM departments d
+       WHERE d.dept_no IN
+           (SELECT /*+ NO_SEMIJOIN(DUPSWEEDOUT, FIRSTMATCH) */ de.dept_no 
+           FROM dept_emp de);
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/58cdf669-8092-4198-b1ee-ab79f42325fe)
+
+### 😡 SUBQUERY
+
+- `서브쿼리 최적화`는 **세미 조인 최적화가 사용되지 못할 때 사용하는 최적화 방법**이다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/bd52c324-cb83-44ac-949a-1d83710e3ff3)
+
+`세미 조인 최적화`는 주로 `IN(subquery)` 형태의 쿼리에서 사용할 수 있다.
+
+`안티 세미 조인 최적화`에는 주로 위의 2가지 최적화가 사용된다.
+
+`서브쿼리 최적화 힌트`는 세미 조인 최적화 힌트와 비슷한 형태로 사용된다.
+
+`서브쿼리`에 힌트를 사용하거나 외부 **쿼리 블록에서 최적화 방법을 명시**하면 된다.
+
+### 🤔 BNL & NO_BNL & HASH_JOIN & NO_HASHJOIN
+
+- `BNL` 힌트와 `NO_BNL` 힌트는 MySQL `8.0.20`과 그 이후의 버전에서도 **여전히 사용 가능**하다.
+- `8.0.20` 버전부터는 `BNL` 힌트를 사용하면 **해시 조인을 사용하도록 유도하는 용도로 변경**되었다.
+- `HASH_JOIN`과 `NO_HASHJOIN` 힌트는 8.0.18 버전에서만 유효하다.
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ BNL(e, de) */ *
+       FROM employees e
+       INNER JOIN dept_emp de ON de.emp_no=e.emp_no;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/6b2d953d-0162-4cc7-bcd1-5e5e15beedf0)
+
+MySQL `8.0.20`과 그 이후 버전에서는 `해시 조인`을 `유도`하거나 사용하지 않게 하려면 **BNL과 NO_BNL**
+
+힌트를 `사용`해야 한다. 
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/be7ece71-9380-405a-97b3-b00fc8814744)
+
+### 😑 JOIN_FIXED_ORDER & JOIN_ORDER & JOIN_PRERIX & JOIN_SUFFIX
+
+- `MySQL` 서버에서는 조인의 순서를 결정하기 위해 전통적으로 `STRAIGHT_JOIN` 힌트를 사용해왔다.
+- `STRAIGHT_JOIN` 힌트는 우선 쿼리의 `FROM 절`에 사용된 테이블의 순서를 **조인 순서에 맞게 변경**해야 하는 번거로움이 있었다.
+
+`STRAIGHT_JOIN`은 한 번 사용되면 `FROM 절`에 명시된 모든 테이블의 순서가 결정된다.
+
+따라서 일부는 `조인 순서`를 `강제`하고 나머지는 `옵티마이저`에게 **순서를 결정하게 맞기는 것이 불가능**했다.
+
+`옵티마이저 힌트`에서는 `STRAIGHT_JOIN`과 **동일한 힌트까지 포함해서 4가지를 제공**한다.
+
+- `JOIN_FIXED_ORDER` : **STRAIGHT_JOIN** 힌트와 동일하게 **FROM 절**의 테이블 순서대로 조인을 실행하게 하는 힌트
+- `JOIN_ORDER` : **FROM 절**에 사용된 테이블의 순서가 아니라 `힌트`에 명시된 **테이블의 순서대로 조인**을 실행하는 힌트
+- `JOIN_PREFIX` : 조인에서 드라이빙 테이블만 강제하는 힌트
+- `JOIN_SUFFIX` : 조인에서 드리븐 테이블(**가장 마지막에 조인돼야 할 테이블들**)만 강제하는 힌트
+
+`조인 순서`와 관련된 `옵티마이저` 힌트의 사용법은 아래와 같다.
+
+```sql
+-- FROM 절에 나열된 테이블의 순서대로 조인 실행
+mysql> SELECT /*+ JOIN_FIXED_ORDER() */ *
+       FROM employees e
+         INNER JOIN dept_emp de ON de.emp_no=e.emp_no
+         INNER JOIN departments d ON d.dept_no=de.dept_no;
+         
+
+-- 일부 테이블에 대해서만 조인 순서를 나열
+mysql> SELECT /*+ JOIN_ORDER(d, de) */ *
+       FROM employees e
+         INNER JOIN dept_emp de ON de.emp_no=e.emp_no
+         INNER JOIN departments d ON d.dept_no=de.dept_no;
+        
+
+-- 조인의 드라이빙 테이블에 대해서만 조인 순서를 나열
+mysql> SELECT /*+ JOIN_PREFIX(e, de) */ *
+       FROM emplyoees e
+         INNER JOIN dept_emp de ON de.emp_no=e.emp_no
+         INNER JOIN departments d ON d.dept_no=de.dept_no;
+         
+
+-- 조인의 드리븐 테이블에 대해서만 조인 순서를 나열
+mysql> SELECT /*+ JOIN_SUFFIX(de, e) */ *
+       FROM emplyoees e
+         INNER JOIN dept_emp de ON de.emp_no=e.emp_no
+         INNER JOIN departments d ON d.dept_no=de.dept_no;
+```
+
+### 🧑🏼‍🎄 MERGE & NO_MERGE
+
+- 예전 버전의 `MySQL` 서버에서는 `FROM 절`에 사용된 **서브쿼리를 항상 내부 임시테이블로 생성**했다.
+- MySQL `5.7`과 `8.0` 버전에서는 가능하면 `임시 테이블`을 사용하지 않게 `FROM 절`의 서브쿼리를 외부 쿼리와 **병합하는 최적화를 도입**했다.
+
+때로는 `내부 임시 테이블`을 생성하는 것이 더 나은 선택일 수 있는데, `옵티마이저`는 최적의 방법을 선택하지 못할 수 있다. 
+
+이럴때는 `MERGE` 또는 `NO_MERGE` **옵티마이저 힌트를 사용**하면 된다.
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ MERGE(sub) */ *
+       FROM (SELECT * 
+             FROM employees
+             WHERE first_name='Matt') sub LIMIT 10;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/031d0757-405e-4ae3-9999-2fdd00fc5441)
+
+```sql
+mysql> EXPLAIN
+       SELECT /*+ NO_MERGE(sub) */ *
+       FROM (SELECT * 
+             FROM employees
+             WHERE first_name='Matt') sub LIMIT 10;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/9d2e0af1-fe19-43cd-9de1-9d7d2b4e0ab3)
+
+### 😎 INDEX_MERGE & NO_INDEX_MERGE
+
+- `MySQL` 서버는 가능하다면 테이블당 `하나`의 `인덱스`만을 이용해 쿼리를 처리하려고 한다.
+- `인덱스 머지` 실행 계획은 때로는 `성능 향상`에 도움이 되지만 항상 그렇지는 않을 수 있다.
+- `인덱스 머지` 실행 계획의 사용 여부를 제어하려면 `옵티마이저 힌트`를 사용하면 된다.
+
+```sql
+mysql> EXPLAIN SELECT * 
+       FROM employees
+       WHERE first_name='Georgi' AND emp_no BETWEEN 10000 AND 20000;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/fbafcf84-3ee3-4e63-bd98-f34ab914306f)
+
+```sql
+mysql> EXPLAIN 
+       SELECT /*+ NO_INDEX_MERGE(employees PRIMARY) */ *
+       FROM employees
+       WHERE first_name='Georgi' AND emp_no BETWEEN 10000 AND 20000;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/fc9d90b3-0191-4822-88e9-e93cb424b41c)
+
+```sql
+mysql> EXPLAIN 
+       SELECT /*+ INDEX_MERGE(employees ix_firstname, PRIMARY) */ *
+       FROM employees
+       WHERE first_name='Georgi' AND emp_no BETWEEN 10000 AND 20000;
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/7487dc0e-d525-4343-ba61-74df7473a05d)
+
+### 👿 NO_ICP
+
+- `인덱스 컨디션 푸시다운` 최적화는 사용 가능하다면 항상 성능 향상에 도움이 된다 .
+- `인덱스 컨디션 푸시다운`으로 인해 여러 실행 계획의 `비용 계산`이 `잘못`된다면 결과적으로 잘못된 실행 계획을 `수립`하게 될 수 있다.
+
+`A` 인덱스와 `B` 인덱스 둘 중에서 하나만 **선택해야 하는 상황이 있다고 가정**한다.
+
+`A` 인덱스에서는 `인덱스 컨디션 푸시다운`이 가능해서 A 인덱스를 사용하는 것이 **비용이 더 낮게 예측**되었다.
+
+그렇다면 `옵티마이저`는 A 인덱스를 사용하는 `실행 계획`을 선택할 것이다.
+
+하지만 `실제 서비스`에서는 B 인덱스를 선택하는 것이 더 효율적일 때가 있다. 
+
+그렇다고 해서 `A` 인덱스를 **완전히 사용하지 못하게** 하거나 `B` 인덱스를 **선호하게 하는 것**은 좋지 않다.
+
+`테이블`의 데이터 분포가 항상 `균등`한 것이 아니기 때문에 `쿼리 검색 범위`에 따라 **A 인덱스가 더 효율적**일 수 있기 때문이다.
+
+이런 경우에는 `인덱스 컨디션 푸시다운` 최적화만 `비활성화`해서 조금 **더 유연한 실행 계획을 선택**하게 할 수 있다.
+
+```sql
+-- ICP 테스트를 위한 임시 인덱스 생성
+mysql> ALTER TABLE employees ADD INDEX ix_lastname_firstname (last_name, first_name);
+
+-- Extra 컬럼의 "Using index condition" 문구를 보면
+-- 기본적으로 MySQL 옵티마이저는 인덱스 컨디션 푸시다운 최적화를 선택한 것을 알 수 있다.
+mysql> EXPLAIN
+       SELECT * 
+       FROM employees
+       WHERE last_name='Action' AND first_name LIKE '%sal';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/de4ccf54-7d0f-44e7-9f67-b6ac44ad388c)
+
+```sql
+-- NO_ICP 옵티마이저 힌트를 이용해 인덱스 컨디션 푸시다운 최적화를 비활성화한 후
+-- Extra 컬럼에는 "Using where"만 표시됨
+mysql> EXPLAIN
+       SELECT /*+ NO_ICP(employees ix_lastname_firstname) */ * 
+       FROM employees
+       WHERE last_name='Action' AND first_name LIKE '%sal';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/5888585a-e33e-40c8-bf9b-bc6e95218209)
+
+### 😍 SKIP_SCAN & NO_SKIP_SCAN
+
+- 조건이 누락된 `선행 컬럼`이 가지는 **유니크한 값의 개수**가 많아진다면 `인덱스 스킵 스캔`의 성능은 오히려 떨어진다.
+- `옵티마이저`가 인덱스 스킵 스캔을 선택함으로 인해서 성능이 떨어진다면 `NO_SKIP_SCAN` 옵티마이저 힌트를 이용할 수 있다.
+
+```sql
+-- 인덱스 스킵 스캔 테스트를 위한 임시 인덱스 생성
+mysql> ALTER TABLE employees
+         ADD INDEX ix_gender_birthdate (gender, birth_date);
+         
+
+mysql> EXPLAIN
+       SELECT gender, birth_date
+       FROM employees
+       WHERE birth_date >= '1965-02-01';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/f0a26f91-1f48-4209-8e40-62621039ccc4)
+
+```sql
+-- NO_SKIP_SCAN 힌트를 이용해 인덱스 스킵 스캔을 비활성화
+mysql> EXPLAIN
+       SELECT /*+ NO_SKIP_SCAN(employees ix_gender_birthdate) */ gender, birth_date
+       FROM employees
+       WHERE birth_date >= '1965-02-01';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/2584c850-1c9b-4def-9733-9273fe97e252)
+
+### 🙃 INDEX & NO_INDEX
+
+- `INDEX`와 `NO_INDEX` 옵티마이저 힌트는 예전 `MySQL` 서버에서 사용되던 **인덱스 힌트를 대체하는 용도**로 `제공`된다.
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/72148b49-c602-45bf-be67-e273906c0a4d)
+
+`인덱스 힌트`는 특정 테이블 뒤에 사용했기 때문에 별도로 `테이블명` 명시 없이 `인덱스 이름`만 나열했지만,
+
+`옵티마이저 힌트`에는 테이블명과 인덱스 이름을 함께 `명시`해야 한다.
+
+```sql
+-- 인덱스 힌트 사용
+mysql> EXPLAIN
+       SELECT * 
+       FROM employees USE INDEX(ix_firstname)
+       WHERE first_name='Matt';
+       
+
+-- 옵티마이저 힌트 사용
+mysql> EXPLAIN
+       SELECT /*+ INDEX(employees ix_firstname) */ *
+       FROM employees
+       WHERE first_name='Matt';
+```
+
+![image](https://github.com/AK-47-Study/real-mysql-study/assets/91787050/29d0a7a1-7c79-40b8-b5a3-f73f3a2e88bb)
